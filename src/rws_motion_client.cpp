@@ -3,6 +3,7 @@
 #include <abb_robot_msgs/srv/set_io_signal.hpp>
 #include <abb_robot_msgs/srv/get_rapid_bool.hpp>
 #include <abb_robot_msgs/srv/set_rapid_bool.hpp>
+#include <abb_robot_msgs/srv/set_rapid_num.hpp>
 #include <abb_robot_msgs/msg/rapid_symbol_path.hpp>
 #include <abb_robot_msgs/srv/trigger_with_result_code.hpp>
 
@@ -24,7 +25,8 @@ public:
         rws_set_bool_client_        = this->create_client<abb_robot_msgs::srv::SetRAPIDBool>("/rws_client/set_rapid_bool");
         rws_get_bool_client_        = this->create_client<abb_robot_msgs::srv::GetRAPIDBool>("/rws_client/get_rapid_bool");
         rws_pp_to_main_client_      = this->create_client<abb_robot_msgs::srv::TriggerWithResultCode>("/rws_client/pp_to_main");
-        rws_pp_start_rapid_client_  = this->create_client<abb_robot_msgs::srv::TriggerWithResultCode>("/rws_client/start_rapid");
+        rws_start_rapid_client_     = this->create_client<abb_robot_msgs::srv::TriggerWithResultCode>("/rws_client/start_rapid");
+        rws_set_num_client_         = this->create_client<abb_robot_msgs::srv::SetRAPIDNum>("/rws_client/set_rapid_num");
 
         start_grinder_client_       = this->create_client<data_gathering_msgs::srv::StartGrinder>("/grinder_node/enable_grinder");
         stop_grinder_client_        = this->create_client<data_gathering_msgs::srv::StopGrinder>("/grinder_node/disable_grinder");
@@ -37,14 +39,15 @@ public:
         symbol_grind0_flag = "waiting_at_grind0";
         symbol_grind_done_flag = "finished_grind_pass";
         symbol_run_status_flag = "run_status";
+        symbol_nr_passes = "num_pass";
+        symbol_tcp_speed = "tcp_feedrate";
 
         bool_timer_period_ = 250; // Milliseconds 
         flip_back_timer_busy = false;
         finished_grind_timer_busy = false;
+        max_tcp_speed = 30.; // TODO MAKE THIS A PARAMETER
+        grinder_spinup_duration = 4; //seconds 
 
-        // Retract acf
-        // TODO
-        
         stamped_std_msgs::msg::Float32Stamped retract_message;
         retract_message.data = -5.0;
         retract_message.header.stamp = this->get_clock()->now(); // Ensure timestamp is set
@@ -63,10 +66,11 @@ private:
 
     // rws interfaces 
     rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_pp_to_main_client_;
-    rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_pp_start_rapid_client_;
-    // rclcpp::Client<abb_robot_msgs::srv::SetIOSignal>::SharedPtr rws_set_io_client_;
+    rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_start_rapid_client_;
+        // rclcpp::Client<abb_robot_msgs::srv::SetIOSignal>::SharedPtr rws_set_io_client_;
     rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedPtr rws_get_bool_client_;
     rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedPtr rws_set_bool_client_;
+    rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedPtr rws_set_num_client_;
     
     rclcpp::Client<data_gathering_msgs::srv::StartGrinder>::SharedPtr start_grinder_client_;
     rclcpp::Client<data_gathering_msgs::srv::StopGrinder>::SharedPtr stop_grinder_client_;
@@ -80,19 +84,38 @@ private:
     rclcpp::TimerBase::SharedPtr timer_wait_grind0_;
     rclcpp::TimerBase::SharedPtr timer_wait_grind_done_;
     rclcpp::TimerBase::SharedPtr timer_wait_script_done_;
+    rclcpp::TimerBase::SharedPtr timer_wait_grinder_spinup_;
 
     std::string symbol_home_flag;
     std::string symbol_grind0_flag;
     std::string symbol_grind_done_flag;
     std::string symbol_run_status_flag; 
+    std::string symbol_nr_passes;
+    std::string symbol_tcp_speed;
     
     int bool_timer_period_;
     bool flip_back_timer_busy;
     bool finished_grind_timer_busy;
+    double max_tcp_speed;
+    int grinder_spinup_duration;
 
     void startMoveCallback(const data_gathering_msgs::srv::StartGrindTest::Request::SharedPtr request,
                            data_gathering_msgs::srv::StartGrindTest::Response::SharedPtr response) {
         RCLCPP_INFO(this->get_logger(), "Start test request received");
+        if (request->tcp_speed > max_tcp_speed){
+            RCLCPP_WARN(
+                this->get_logger(),
+                "The requested TCP feedrate of [%.2f] exceeds the maximum of [%.2f]",
+                request->tcp_speed,
+                max_tcp_speed
+            );
+
+            RCLCPP_WARN(this->get_logger(), "Ignoring request");
+            response->success = false;
+            response->message = "The requested TCP speed exceeds the maximum of " + std::to_string(max_tcp_speed);
+            return;
+        }
+        
 
         // CHECK WHETHER ABB IS ALREADY RUNNING RAPID 
         auto is_running_bool_req = std::make_shared<abb_robot_msgs::srv::GetRAPIDBool::Request>();
@@ -175,15 +198,81 @@ private:
             return;
 
         }
-        RCLCPP_INFO(this->get_logger(), "Requesting Start RAPID");
-        // PP was successfully set to main. Start RAPID
-        auto request = std::make_shared<abb_robot_msgs::srv::TriggerWithResultCode::Request>();
-        rws_pp_start_rapid_client_->async_send_request(request,
-                [this,response](rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedFuture future){this->handleStartRapidResponse(future, response);
-        });
+        RCLCPP_INFO(this->get_logger(), "Setting number of passes");
+        // PP was successfully set to main. Set speed and nr of passes
 
+        auto req_passes = std::make_shared<abb_robot_msgs::srv::SetRAPIDNum::Request>();
+        req_passes->path.task = "T_ROB1";
+        req_passes->path.module = "Grinding";
+        req_passes->path.symbol = symbol_nr_passes;
+        req_passes->value = test_request_->passes;
+        rws_set_num_client_->async_send_request(req_passes,
+                [this, response](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedFuture future){this->handleSetNrPassesResponse(future, response);}
+        );
     }
 
+    void handleSetNrPassesResponse(rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
+        // Conditions for early return 
+        try {
+            auto result = future.get();
+            if (result->result_code != 1) {
+                test_response_->success = false;
+                test_response_->message += "Failed to set number of passes";
+                finalizeResponse(test_response_);
+                return;
+            }
+        } catch (const std::exception &e) {
+            test_response_->success = false;
+            test_response_->message += "Error reading set nr of passes response " + std::string(e.what());
+            finalizeResponse(test_response_);
+            return;
+        }
+
+
+        // Set the number of passes, now set the tcp speed. 
+        RCLCPP_INFO(this->get_logger(), "Setting TCP feedrate");
+        auto req_passes = std::make_shared<abb_robot_msgs::srv::SetRAPIDNum::Request>();
+        req_passes->path.task = "T_ROB1";
+        req_passes->path.module = "Grinding";
+        req_passes->path.symbol = symbol_tcp_speed;
+
+        req_passes->value = test_request_->tcp_speed;
+        rws_set_num_client_->async_send_request(req_passes,
+                [this, response](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedFuture future){this->handleSetTCPSpeedResponse(future, response);}
+        );
+    }
+     void handleSetTCPSpeedResponse(rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
+        // Conditions for early return 
+        try {
+            auto result = future.get();
+            if (result->result_code != 1) {
+                test_response_->success = false;
+                test_response_->message += "Failed to set TCP speed";
+                finalizeResponse(test_response_);
+                return;
+            }
+        } catch (const std::exception &e) {
+            test_response_->success = false;
+            test_response_->message += "Error reading set TCP speed response " + std::string(e.what());
+            finalizeResponse(test_response_);
+            return;
+        }
+    
+    // The variables are set, now the RAPID program can be started. 
+    startRAPID(response);
+    }
+
+    void startRAPID(std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
+
+        RCLCPP_INFO(this->get_logger(), "\n\nStarting RAPID\n");
+
+        auto request = std::make_shared<abb_robot_msgs::srv::TriggerWithResultCode::Request>();
+        rws_start_rapid_client_->   async_send_request(request,
+                [this,response](rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedFuture future){this->handleStartRapidResponse(future, response);
+        });
+     }
+
+    
     void handleStartRapidResponse(rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
         // Conditions for early return 
         try {
@@ -316,6 +405,7 @@ private:
     }
 
     void handleStartGrinderResponse(rclcpp::Client<data_gathering_msgs::srv::StartGrinder>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
+        
         // Conditions for early return 
         try {
             auto result = future.get();
@@ -333,12 +423,23 @@ private:
         }
 
         // Grinder was started, now move on to the next position by reseting the waiting_at_home bool
-        resetBoolValue(symbol_home_flag, response,
-            [this](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response) {
-                this->handleResetHomeBoolResponse(future, response);
-        });
+        // First wait for a couple of seconds for the grinder to spin up
+        timer_wait_grinder_spinup_ = this->create_wall_timer(
+            std::chrono::seconds(grinder_spinup_duration),
+            [this, response]() {
 
+                // Spinup duration elapsed. Cancel timer 
+                this->timer_wait_grinder_spinup_->cancel();
 
+                RCLCPP_INFO(this->get_logger(), "Grinder spin-up duration elapsed. Moving to first grind position.");
+
+                // Reset the wait at home flag, to move the grinder to the next position.
+                resetBoolValue(symbol_home_flag, response,
+                    [this](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response) {
+                    this->handleResetHomeBoolResponse(future, response);
+                });
+            }
+        );
     }
 
     void resetBoolValue(const std::string &value, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response,
@@ -488,7 +589,6 @@ private:
         acf_req.data = -5.;
         acf_force_publisher_->publish(acf_req);
 
-        // Now at home position. Spin up the grinder.
         auto grinder_off_req = std::make_shared<data_gathering_msgs::srv::StopGrinder::Request>(); 
 
         stop_grinder_client_->async_send_request(grinder_off_req, 
@@ -519,14 +619,37 @@ private:
             test_response_->message += result->grind_message.c_str();
         }
 
+        resetBoolValue(symbol_grind_done_flag, response, 
+            [this](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response) {
+                    this->handleResetGrindDoneResponse(future, response);
+            }
+        );
+    }
+
+    void handleResetGrindDoneResponse(rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture future, std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
+        try {
+            auto result = future.get();
+            if (result->result_code != 1) {
+                response->success = false;
+                response->message += "Failed to reset bool: " + symbol_grind_done_flag;
+                finalizeResponse(response);
+                return; 
+            }
+        } catch (const std::exception &e) {
+            response->success = false;
+            response->message += "Error reading set bool response " + std::string(e.what());
+            finalizeResponse(response);
+            return;
+        }
+
         // Wait until the script is done to finish the test service request 
         timer_wait_script_done_ = this->create_wall_timer(
             std::chrono::milliseconds(bool_timer_period_),
             [this, response]() {
                 this->checkFinishedBool(response);
-            });
-
+        });
     }
+ 
 
     void checkFinishedBool(std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> response){
         
