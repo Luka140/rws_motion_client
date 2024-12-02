@@ -15,7 +15,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    pkg = "abb_motion_client_cpp"
+    pkg = "rws_motion_client"
 
     robot_ip = LaunchConfiguration("robot_ip")
     robot_port = LaunchConfiguration("robot_port")
@@ -196,10 +196,4 @@ def generate_launch_description():
         arguments=["-d", rviz_config_file],
     )
 
-    motion_client = Node(
-        package=pkg,
-        executable="rws_motion_client",
-        arguments=[],
-    )
-
-    return LaunchDescription(declared_arguments + [rws_node, motion_client, robot_state_publisher_node, rviz_node])
+    return LaunchDescription(declared_arguments + [rws_node, robot_state_publisher_node, rviz_node])

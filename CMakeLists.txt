@@ -10,10 +10,10 @@ find_package(stamped_std_msgs REQUIRED)
 find_package(data_gathering_msgs REQUIRED)
 
 # Add the executable
-add_executable(rws_motion_client src/rws_motion_client.cpp)
+add_executable(motion_client src/rws_motion_client.cpp)
 
 # Link against ROS 2 libraries
-ament_target_dependencies(rws_motion_client
+ament_target_dependencies(motion_client
     rclcpp
     std_srvs
     abb_robot_msgs
@@ -22,14 +22,12 @@ ament_target_dependencies(rws_motion_client
 )
 
 # Install the executable
-install(TARGETS rws_motion_client
+install(TARGETS motion_client
     DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/
 )
-
-
 
 ament_package()
