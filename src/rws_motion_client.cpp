@@ -12,6 +12,7 @@
 #include <data_gathering_msgs/srv/start_grind_test.hpp>
 #include <data_gathering_msgs/srv/start_grinder.hpp>
 #include <data_gathering_msgs/srv/stop_grinder.hpp>
+#include <data_gathering_msgs/msg/grind_settings.hpp>
 
 #include <string>
 
@@ -20,12 +21,13 @@ class RWSMotionClient : public rclcpp::Node {
 public:
     RWSMotionClient() : Node("rws_motion_client"){
 
+        exclusive_group     = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         start_move_service_ = this->create_service<data_gathering_msgs::srv::StartGrindTest>(
             "~/start_grind_move",
-            std::bind(&RWSMotionClient::startMoveCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-            // rmw_qos_profile_services_default,  // Third argument: QoS profile
-            // this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive) // Fourth argument: Callback group
-        // );
+            std::bind(&RWSMotionClient::startMoveCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+            rmw_qos_profile_services_default,
+            exclusive_group 
+        );          // TODO ALL THE TIMERS CAN BE SET TO MUTUALLY EXCLUSIVE CALLBACKS
 
         rws_set_bool_client_        = this->create_client<abb_robot_msgs::srv::SetRAPIDBool>("/rws_client/set_rapid_bool");
         rws_get_bool_client_        = this->create_client<abb_robot_msgs::srv::GetRAPIDBool>("/rws_client/get_rapid_bool");
@@ -38,25 +40,24 @@ public:
         start_grinder_client_       = this->create_client<data_gathering_msgs::srv::StartGrinder>("/grinder_node/enable_grinder");
         stop_grinder_client_        = this->create_client<data_gathering_msgs::srv::StopGrinder>("/grinder_node/disable_grinder");
         acf_force_publisher_        = this->create_publisher<stamped_std_msgs::msg::Float32Stamped>("/acf/force", 10);
+        settings_publisher_         = this->create_publisher<data_gathering_msgs::msg::GrindSettings>("~/grind_settings", 10);
 
+        // TODO parameterize
 
-        // bool_symbol_req_default.path.task = "T_ROB1";
-        // bool_symbol_req_default.path.module = "Grinding";
+        symbol_home_flag        = "waiting_at_home";
+        symbol_grind0_flag      = "waiting_at_grind0";
+        symbol_grind_done_flag  = "finished_grind_pass";
+        symbol_run_status_flag  = "run_status";
+        symbol_nr_passes        = "num_pass";
+        symbol_tcp_speed        = "tcp_feedrate";
 
-        symbol_home_flag = "waiting_at_home";
-        symbol_grind0_flag = "waiting_at_grind0";
-        symbol_grind_done_flag = "finished_grind_pass";
-        symbol_run_status_flag = "run_status";
-        symbol_nr_passes = "num_pass";
-        symbol_tcp_speed = "tcp_feedrate";
-
-        estop_triggered_ = false;
-        service_available = true; 
-        bool_timer_period_ = 100; // Milliseconds 
-        flip_back_timer_busy = false;
-        finished_grind_timer_busy = false;
-        max_tcp_speed = 30.; // TODO MAKE THIS A PARAMETER
-        grinder_spinup_duration = 4; //seconds 
+        estop_triggered_            = false;
+        service_available           = true; 
+        bool_timer_period_          = 100; // Milliseconds 
+        flip_back_timer_busy        = false;
+        finished_grind_timer_busy   = false;
+        max_tcp_speed               = 30.; // TODO MAKE THIS A PARAMETER
+        grinder_spinup_duration     = 4; //seconds 
 
         stamped_std_msgs::msg::Float32Stamped retract_message;
         retract_message.data = -5.0;
@@ -67,6 +68,8 @@ public:
     }
 
 private:
+    rclcpp::CallbackGroup::SharedPtr exclusive_group;
+
     // Main service to perform a test and response
     rclcpp::Service<data_gathering_msgs::srv::StartGrindTest>::SharedPtr start_move_service_;
     std::string message_;
@@ -80,7 +83,6 @@ private:
     // rws interfaces 
     rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_pp_to_main_client_;
     rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_start_rapid_client_;
-        // rclcpp::Client<abb_robot_msgs::srv::SetIOSignal>::SharedPtr rws_set_io_client_;
     rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedPtr rws_get_bool_client_;
     rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedPtr rws_set_bool_client_;
     rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedPtr rws_set_num_client_;
@@ -88,8 +90,8 @@ private:
     
     rclcpp::Client<data_gathering_msgs::srv::StartGrinder>::SharedPtr start_grinder_client_;
     rclcpp::Client<data_gathering_msgs::srv::StopGrinder>::SharedPtr stop_grinder_client_;
-
     rclcpp::Publisher<stamped_std_msgs::msg::Float32Stamped>::SharedPtr acf_force_publisher_;
+    rclcpp::Publisher<data_gathering_msgs::msg::GrindSettings>::SharedPtr settings_publisher_;
 
     // Bool request with module and task preset
     abb_robot_msgs::srv::GetRAPIDBool::Request bool_symbol_req_default;
@@ -210,6 +212,15 @@ private:
         test_request_           = request;   
         test_response_          = response;
 
+        // Publish test settings for recording 
+        auto grind_settings = data_gathering_msgs::msg::GrindSettings();
+        grind_settings.rpm = test_request_->rpm;  
+        grind_settings.force = test_request_->force;
+        grind_settings.passes = test_request_->passes;
+        grind_settings.tcp_speed = test_request_->tcp_speed;
+        grind_settings.contact_time = test_request_->contact_time;
+        settings_publisher_->publish(grind_settings);
+
         RCLCPP_INFO(this->get_logger(), "Requesting PP to main...");
 
         auto pp_to_main_req = std::make_shared<abb_robot_msgs::srv::TriggerWithResultCode::Request>();
@@ -237,7 +248,6 @@ private:
         req_passes->path.module = "Grinding";
         req_passes->path.symbol = symbol_nr_passes;
         req_passes->value = test_request_->passes;
-
 
         if (estop_triggered_) {
             RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
@@ -806,7 +816,9 @@ private:
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<RWSMotionClient>();
-    rclcpp::spin(node);
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
     rclcpp::shutdown();
     return 0;
 }

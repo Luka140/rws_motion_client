@@ -196,4 +196,4 @@ def generate_launch_description():
         arguments=["-d", rviz_config_file],
     )
 
-    return LaunchDescription(declared_arguments + [rws_node, robot_state_publisher_node, rviz_node])
+    return LaunchDescription(declared_arguments + [rws_node, robot_state_publisher_node])
