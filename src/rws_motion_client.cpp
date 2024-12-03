@@ -6,6 +6,7 @@
 #include <abb_robot_msgs/srv/set_rapid_num.hpp>
 #include <abb_robot_msgs/msg/rapid_symbol_path.hpp>
 #include <abb_robot_msgs/srv/trigger_with_result_code.hpp>
+#include <abb_robot_msgs/msg/system_state.hpp>
 
 #include <stamped_std_msgs/msg/float32_stamped.hpp>
 #include <data_gathering_msgs/srv/start_grind_test.hpp>
@@ -31,10 +32,13 @@ public:
         rws_pp_to_main_client_      = this->create_client<abb_robot_msgs::srv::TriggerWithResultCode>("/rws_client/pp_to_main");
         rws_start_rapid_client_     = this->create_client<abb_robot_msgs::srv::TriggerWithResultCode>("/rws_client/start_rapid");
         rws_set_num_client_         = this->create_client<abb_robot_msgs::srv::SetRAPIDNum>("/rws_client/set_rapid_num");
+        rws_sys_states_sub_         = this->create_subscription<abb_robot_msgs::msg::SystemState>("/rws_client/system_states", 10,
+                                                                                                  std::bind(&RWSMotionClient::systemStateCallback, this, std::placeholders::_1));
 
         start_grinder_client_       = this->create_client<data_gathering_msgs::srv::StartGrinder>("/grinder_node/enable_grinder");
         stop_grinder_client_        = this->create_client<data_gathering_msgs::srv::StopGrinder>("/grinder_node/disable_grinder");
         acf_force_publisher_        = this->create_publisher<stamped_std_msgs::msg::Float32Stamped>("/acf/force", 10);
+
 
         // bool_symbol_req_default.path.task = "T_ROB1";
         // bool_symbol_req_default.path.module = "Grinding";
@@ -46,8 +50,9 @@ public:
         symbol_nr_passes = "num_pass";
         symbol_tcp_speed = "tcp_feedrate";
 
+        estop_triggered_ = false;
         service_available = true; 
-        bool_timer_period_ = 250; // Milliseconds 
+        bool_timer_period_ = 100; // Milliseconds 
         flip_back_timer_busy = false;
         finished_grind_timer_busy = false;
         max_tcp_speed = 30.; // TODO MAKE THIS A PARAMETER
@@ -79,6 +84,7 @@ private:
     rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedPtr rws_get_bool_client_;
     rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedPtr rws_set_bool_client_;
     rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedPtr rws_set_num_client_;
+    rclcpp::Subscription<abb_robot_msgs::msg::SystemState>::SharedPtr rws_sys_states_sub_;
     
     rclcpp::Client<data_gathering_msgs::srv::StartGrinder>::SharedPtr start_grinder_client_;
     rclcpp::Client<data_gathering_msgs::srv::StopGrinder>::SharedPtr stop_grinder_client_;
@@ -101,6 +107,7 @@ private:
     std::string symbol_nr_passes;
     std::string symbol_tcp_speed;
     
+    bool estop_triggered_;
     bool service_available;
     int bool_timer_period_;
     bool flip_back_timer_busy;
@@ -146,6 +153,11 @@ private:
         is_running_bool_req->path.task = "T_ROB1";
         is_running_bool_req->path.module = "Grinding";
         is_running_bool_req->path.symbol = symbol_run_status_flag;
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
 
         rws_get_bool_client_->async_send_request(is_running_bool_req, 
         [this, service, request_header, request, response](rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedFuture future) {
@@ -199,10 +211,13 @@ private:
         test_response_          = response;
 
         RCLCPP_INFO(this->get_logger(), "Requesting PP to main...");
-        // TODO
-        // SET SPEED AND PASSES
+
         auto pp_to_main_req = std::make_shared<abb_robot_msgs::srv::TriggerWithResultCode::Request>();
-        // rws_pp_to_main_client_->async_send_request(pp_to_main_req, std::bind(RWSMotionClient::handlePPToMainResponse, this));
+    
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
         rws_pp_to_main_client_->async_send_request(pp_to_main_req,
             [this](rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedFuture future){this->handlePPToMainResponse(future);
         });
@@ -222,6 +237,13 @@ private:
         req_passes->path.module = "Grinding";
         req_passes->path.symbol = symbol_nr_passes;
         req_passes->value = test_request_->passes;
+
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         rws_set_num_client_->async_send_request(req_passes,
                 [this](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedFuture future){this->handleSetNrPassesResponse(future);}
         );
@@ -241,6 +263,13 @@ private:
         req_passes->path.symbol = symbol_tcp_speed;
 
         req_passes->value = test_request_->tcp_speed;
+
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         rws_set_num_client_->async_send_request(req_passes,
                 [this](rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedFuture future){this->handleSetTCPSpeedResponse(future);}
         );
@@ -251,7 +280,13 @@ private:
         auto successful = checkABBResponse(future ,"setting TCP speed");
         if (!successful){return;}
 
-        // The variables are set, now the RAPID program can be started. 
+        // The variables are set, now the RAPID program can be started.
+        
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         startRAPID();
     }
 
@@ -259,6 +294,12 @@ private:
         RCLCPP_INFO(this->get_logger(), "\n\nStarting RAPID\n");
 
         auto request = std::make_shared<abb_robot_msgs::srv::TriggerWithResultCode::Request>();
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         rws_start_rapid_client_->   async_send_request(request,
                 [this](rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedFuture future){this->handleStartRapidResponse(future);
         });
@@ -271,6 +312,12 @@ private:
         if (!successful){return;}
 
         RCLCPP_INFO(this->get_logger(), "Moving to home...");
+
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
 
         // RAPID Successfully started
         // Next wait until bool 'waiting_at_home' is set to True
@@ -305,6 +352,12 @@ private:
 
         */
 
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         // Check and set flag so that the timer won't call this function again while this one is still in progress.
         if (flip_back_timer_busy){
             RCLCPP_WARN(this->get_logger(), "Overlapping timer callback for checkBoolValueFlipBack. Ignoring...");    
@@ -324,6 +377,12 @@ private:
         // Send the request asynchronously
         rws_get_bool_client_->async_send_request(bool_req,
             [this, value, weak_timer, next_func](rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedFuture future) {
+
+                if (this->estop_triggered_) {
+                    RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+                    return;
+                }
+
                 try {
                     auto result = future.get();
 
@@ -350,8 +409,7 @@ private:
                             timer->cancel();
                             flip_back_timer_busy = false;
 
-                        next_func();
-                        
+                        next_func();                        
                         }
                     } else {
                         // RCLCPP_WARN(this->get_logger(), "BOOL value is false. Rechecking...");
@@ -371,6 +429,12 @@ private:
 
 
     void enableGrinder(){
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         RCLCPP_INFO(this->get_logger(), "Enabling grinder");
         // Now at home position. Spin up the grinder.
         auto grinder_req = std::make_shared<data_gathering_msgs::srv::StartGrinder::Request>();
@@ -383,6 +447,11 @@ private:
     }
 
     void handleStartGrinderResponse(rclcpp::Client<data_gathering_msgs::srv::StartGrinder>::SharedFuture future){
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
         
         // Conditions for early return 
         try {
@@ -405,7 +474,11 @@ private:
         timer_wait_grinder_spinup_ = this->create_wall_timer(
             std::chrono::seconds(grinder_spinup_duration),
             [this]() {
-
+                
+                if (estop_triggered_) {
+                    RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+                    return;
+                }
                 // Spinup duration elapsed. Cancel timer 
                 this->timer_wait_grinder_spinup_->cancel();
 
@@ -424,6 +497,12 @@ private:
             std::function<void(rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture)> next_func) {
         RCLCPP_INFO(this->get_logger(), "Resetting BOOL value for symbol: %s", value.c_str());
 
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         auto reset_req = std::make_shared<abb_robot_msgs::srv::SetRAPIDBool::Request>();
         reset_req->path.task = "T_ROB1";
         reset_req->path.module = "Grinding";
@@ -436,6 +515,11 @@ private:
     }
 
     void handleResetHomeBoolResponse(rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture future){
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
 
         // Check whether service call was successful.
         auto successful = checkABBResponse(future ,"resetting bool " + symbol_home_flag);
@@ -471,7 +555,12 @@ private:
     
     void enableACF(){
         RCLCPP_INFO(this->get_logger(), "Extending ACF");
-        // publish acf
+        
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         auto acf_req = stamped_std_msgs::msg::Float32Stamped();
         acf_req.data = test_request_->force;
         acf_force_publisher_->publish(acf_req);
@@ -492,6 +581,11 @@ private:
         -> Initialize the timer for periodic BOOL checks
 
         */
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
 
         // Check whether service call was successful.
         auto successful = checkABBResponse(future ,"resetting bool " + symbol_grind0_flag);
@@ -519,6 +613,11 @@ private:
     }
 
     void grindPassDone(){
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
         
         // TODO turn off acf and grinder    
         auto acf_req = stamped_std_msgs::msg::Float32Stamped();
@@ -533,6 +632,12 @@ private:
     }
 
     void handleGrinderOffResponse(rclcpp::Client<data_gathering_msgs::srv::StopGrinder>::SharedFuture future){
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         // Conditions for early return 
         auto result = future.get();
         try {
@@ -564,6 +669,11 @@ private:
 
     void handleResetGrindDoneResponse(rclcpp::Client<abb_robot_msgs::srv::SetRAPIDBool>::SharedFuture future){
 
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
+
         auto successful = checkABBResponse(future ,"resetting bool " + symbol_grind_done_flag);
         if (!successful){return;}
 
@@ -577,6 +687,11 @@ private:
  
 
     void checkFinishedBool(){
+
+        if (estop_triggered_) {
+            RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+            return;
+        }
         
         // Stop timer to prevent functions being called in parallel
         if (finished_grind_timer_busy){
@@ -597,6 +712,11 @@ private:
         // Send the request asynchronously
         rws_get_bool_client_->async_send_request(bool_req,
             [this](rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedFuture future) {
+
+                if (estop_triggered_) {
+                    RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
+                    return;
+                }
                 
                 // Check whether request was successful 
                 auto successful = this->checkABBResponse(future, "reading bool value " + symbol_run_status_flag);
@@ -651,6 +771,34 @@ private:
         RCLCPP_INFO(this->get_logger(), "Sending response: success=%d, message='%s'", response->success, response->message.c_str());
         service->send_response(*request_header, *response);
         service_available = true; 
+    }
+
+    void systemStateCallback(const abb_robot_msgs::msg::SystemState& msg) {
+        if (service_available){
+            return; // Ignore message if nothing is executing 
+        }
+        if (!msg.motors_on){
+            estop_triggered_ = true; 
+
+            // retract acf
+            auto acf_req = stamped_std_msgs::msg::Float32Stamped();
+            acf_req.data = -15.;
+            acf_force_publisher_->publish(acf_req);
+
+            // request grinder off
+            auto grinder_off_req = std::make_shared<data_gathering_msgs::srv::StopGrinder::Request>(); 
+            stop_grinder_client_->async_send_request(grinder_off_req, 
+                [this](rclcpp::Client<data_gathering_msgs::srv::StopGrinder>::SharedFuture future){this->handleGrinderOffResponse(future);
+            });
+
+            RCLCPP_INFO(this->get_logger(), "E-STOP TRIGGERED. Send requests to retract the ACF and turn off the grinder.");
+            // cut off the callback chain process
+            // finalize response
+            test_response_->success = false;
+            test_response_->message += "\nE-stop triggered.\n";
+            finalizeResponse(test_service_, test_request_header_, test_response_);
+        }
+
     }
 };
 
