@@ -56,7 +56,7 @@ public:
         bool_timer_period_          = 100; // Milliseconds 
         flip_back_timer_busy        = false;
         finished_grind_timer_busy   = false;
-        max_tcp_speed               = 30.; // TODO MAKE THIS A PARAMETER
+        max_tcp_speed               = 35.; // TODO MAKE THIS A PARAMETER
         grinder_spinup_duration     = 4; //seconds 
 
         stamped_std_msgs::msg::Float32Stamped retract_message;
@@ -161,6 +161,7 @@ private:
             return;
         }
 
+        RCLCPP_INFO(this->get_logger(), "Checking run-status on the robot");
         rws_get_bool_client_->async_send_request(is_running_bool_req, 
         [this, service, request_header, request, response](rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedFuture future) {
             this->handleRunStatusResponse(future, service, request_header, request, response);
@@ -220,6 +221,9 @@ private:
         grind_settings.tcp_speed = test_request_->tcp_speed;
         grind_settings.contact_time = test_request_->contact_time;
         settings_publisher_->publish(grind_settings);
+
+        // Include a copy of the request settings in the response
+        test_response_->grind_settings = grind_settings;
 
         RCLCPP_INFO(this->get_logger(), "Requesting PP to main...");
 
