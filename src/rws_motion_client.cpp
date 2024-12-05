@@ -17,6 +17,53 @@
 #include <string>
 
 
+/*
+This node interacts with a RAPID program by waiting for booleans in the RAPID script, performing the required action, and then flipping the boolean back.
+For this to work correctly, make sure that the robot is NOT IN CONTINUOUS MODE. 
+
+The flow is as follows:
+
+1.  Wait for a test service call
+	- This includes: force, RPM, tcp speed, passes
+
+2. Check if currently running. 
+    This is first done with a boolean flag in this node (service available).
+    If this is true, the 'symbol_run_status_flag' bool in RAPID is checked. If this is false proceed, otherwise reject the request.
+
+3. use '/rws_client/pp_to_main' to set the program pointer to the start of main
+
+4. Set the params for the number of passes ('symbol_nr_passes') and the TCP speed ('symbol_tcp_speed')  based on the values in the request.
+
+5. Start the RAPID program with '/rws_client/start_rapid'
+
+6. Wait until the home position is reached.
+    This is done by checking the 'symbol_home_flag' bool on a timer. When the bool turns true, the robot has arrived at home and will wait there until it is set to false again.
+
+7. Start grinder with desired rpm ('/grinder_node/enable_grinder') while still at the home position. 
+    Then wait for 'grinder_spinup_duration' number of seconds for the grinder to spin up.
+
+8. Reset the 'symbol_home_flag' (from step 6.) to false again. 
+    The robot will now proceed to move to the first grind position. 
+
+9. Wait until the first grinding position is reached 
+    This is done by checking the 'symbol_grind0_flag' bool on a timer. When the bool turns true, the robot has arrived at the first grinding position and will wait there until it is set to false again.
+
+10. Extend the ACF by publishing the requested grinding force on '/acf/force'.
+
+11. Reset the 'symbol_grind0_flag' (from step 8.) to false again. 
+    The robot will now execute the grinding pass for the requested number of times. 
+
+12. Wait until the robot is done grinding. 
+    This is done by checking the 'symbol_grind_done_flag' bool on a timer. When the bool turns true, the robot has finished grinding. It will NOT wait in this position, but immediately move to the home position.
+
+13. Retract the grinder ('/grinder_node/disable_grinder') and turn off the ACF ('/acf/force'). Then reset the 'symbol_grind_done_flag' boolean to false.
+
+14. Wait until the robot has reached the home position again. 
+    This is done by checking the 'symbol_run_status' bool on a timer. When this bool is false, the entire RAPID script has been executed. When this occurs, send back the service response. 
+
+*/
+
+
 class RWSMotionClient : public rclcpp::Node {
 public:
     RWSMotionClient() : Node("rws_motion_client"){
