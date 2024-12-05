@@ -1,6 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/trigger.hpp>
-#include <abb_robot_msgs/srv/set_io_signal.hpp>
+// #include <abb_robot_msgs/srv/set_io_signal.hpp>
 #include <abb_robot_msgs/srv/get_rapid_bool.hpp>
 #include <abb_robot_msgs/srv/set_rapid_bool.hpp>
 #include <abb_robot_msgs/srv/set_rapid_num.hpp>
@@ -42,26 +42,32 @@ public:
         acf_force_publisher_        = this->create_publisher<stamped_std_msgs::msg::Float32Stamped>("/acf/force", 10);
         settings_publisher_         = this->create_publisher<data_gathering_msgs::msg::GrindSettings>("~/grind_settings", 10);
 
-        // TODO parameterize
+        // Parameters for symbol names as they are set in the RAPID code.
+        symbol_home_flag        = this->declare_parameter<std::string>("symbol_home_flag", "waiting_at_home");              // Flag for home position
+        symbol_grind0_flag      = this->declare_parameter<std::string>("symbol_grind0_flag", "waiting_at_grind0");          // Flag for position where the grinder makes first contact
+        symbol_grind_done_flag  = this->declare_parameter<std::string>("symbol_grind_done_flag", "finished_grind_pass");    // Flag for position where the grinder makes last contact
+        symbol_run_status_flag  = this->declare_parameter<std::string>("symbol_run_status_flag", "run_status");             // Flag for indicating whether the RAPID script is running
+        symbol_nr_passes        = this->declare_parameter<std::string>("symbol_nr_passes", "num_pass");                     // Name of the variable which sets the number of grinder passes
+        symbol_tcp_speed        = this->declare_parameter<std::string>("symbol_tcp_speed", "tcp_feedrate");                 // Name of the variable which sets the TCP feedrate
 
-        symbol_home_flag        = "waiting_at_home";
-        symbol_grind0_flag      = "waiting_at_grind0";
-        symbol_grind_done_flag  = "finished_grind_pass";
-        symbol_run_status_flag  = "run_status";
-        symbol_nr_passes        = "num_pass";
-        symbol_tcp_speed        = "tcp_feedrate";
+        bool_timer_period_      = this->declare_parameter<int>("bool_timer_period", 100);       // Period of the timer checking bools in RAPID [ms]
+        max_tcp_speed           = this->declare_parameter<double>("max_tcp_speed", 35.0);       // The maximum allowed TCP speed [mm/s]. Requests with higher speeds will be rejected
+        grinder_spinup_duration = this->declare_parameter<int>("grinder_spinup_duration", 4);   // Duration waiting for the grinder to spin up before moving to the first grind position [s]
 
+        // Initialize flags 
         estop_triggered_            = false;
         service_available           = true; 
-        bool_timer_period_          = 100; // Milliseconds 
         flip_back_timer_busy        = false;
         finished_grind_timer_busy   = false;
-        max_tcp_speed               = 35.; // TODO MAKE THIS A PARAMETER
-        grinder_spinup_duration     = 4; //seconds 
 
+        // Create default path to the grinding module where all the symbols above are stored.
+        default_path_.task   = "T_ROB1";
+        default_path_.module = "Grinding";
+
+        // Retract the ACF before starting
         stamped_std_msgs::msg::Float32Stamped retract_message;
         retract_message.data = -5.0;
-        retract_message.header.stamp = this->get_clock()->now(); // Ensure timestamp is set
+        retract_message.header.stamp = this->get_clock()->now(); 
         acf_force_publisher_->publish(retract_message);
 
         RCLCPP_INFO(this->get_logger(), "RWS Motion Client initialized");
@@ -75,12 +81,13 @@ private:
     std::string message_;
     bool success_;
 
+    // The main service
     std::shared_ptr<rclcpp::Service<data_gathering_msgs::srv::StartGrindTest>> test_service_;
     std::shared_ptr<rmw_request_id_t> test_request_header_;
     std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Request> test_request_;
     std::shared_ptr<data_gathering_msgs::srv::StartGrindTest::Response> test_response_;
 
-    // rws interfaces 
+    // RWS interfaces 
     rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_pp_to_main_client_;
     rclcpp::Client<abb_robot_msgs::srv::TriggerWithResultCode>::SharedPtr rws_start_rapid_client_;
     rclcpp::Client<abb_robot_msgs::srv::GetRAPIDBool>::SharedPtr rws_get_bool_client_;
@@ -88,6 +95,7 @@ private:
     rclcpp::Client<abb_robot_msgs::srv::SetRAPIDNum>::SharedPtr rws_set_num_client_;
     rclcpp::Subscription<abb_robot_msgs::msg::SystemState>::SharedPtr rws_sys_states_sub_;
     
+    // Interfaces with other bits of testing code
     rclcpp::Client<data_gathering_msgs::srv::StartGrinder>::SharedPtr start_grinder_client_;
     rclcpp::Client<data_gathering_msgs::srv::StopGrinder>::SharedPtr stop_grinder_client_;
     rclcpp::Publisher<stamped_std_msgs::msg::Float32Stamped>::SharedPtr acf_force_publisher_;
@@ -102,6 +110,8 @@ private:
     rclcpp::TimerBase::SharedPtr timer_wait_script_done_;
     rclcpp::TimerBase::SharedPtr timer_wait_grinder_spinup_;
 
+    // Variable names in the ABB RAPID code
+    abb_robot_msgs::msg::RAPIDSymbolPath default_path_; // Default path template
     std::string symbol_home_flag;
     std::string symbol_grind0_flag;
     std::string symbol_grind_done_flag;
@@ -152,9 +162,7 @@ private:
 
         // Check to ensure that ABB is not already running RAPID 
         auto is_running_bool_req = std::make_shared<abb_robot_msgs::srv::GetRAPIDBool::Request>();
-        is_running_bool_req->path.task = "T_ROB1";
-        is_running_bool_req->path.module = "Grinding";
-        is_running_bool_req->path.symbol = symbol_run_status_flag;
+        is_running_bool_req->path = createPath(symbol_run_status_flag);
 
         if (estop_triggered_) {
             RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
@@ -248,9 +256,7 @@ private:
         // PP was successfully set to main. Set speed and nr of passes
 
         auto req_passes = std::make_shared<abb_robot_msgs::srv::SetRAPIDNum::Request>();
-        req_passes->path.task = "T_ROB1";
-        req_passes->path.module = "Grinding";
-        req_passes->path.symbol = symbol_nr_passes;
+        req_passes->path = createPath(symbol_nr_passes);
         req_passes->value = test_request_->passes;
 
         if (estop_triggered_) {
@@ -272,10 +278,7 @@ private:
         // Set the number of passes, now set the tcp speed. 
         RCLCPP_INFO(this->get_logger(), "Setting TCP feedrate");
         auto req_passes = std::make_shared<abb_robot_msgs::srv::SetRAPIDNum::Request>();
-        req_passes->path.task = "T_ROB1";
-        req_passes->path.module = "Grinding";
-        req_passes->path.symbol = symbol_tcp_speed;
-
+        req_passes->path = createPath(symbol_tcp_speed);
         req_passes->value = test_request_->tcp_speed;
 
 
@@ -384,9 +387,7 @@ private:
 
         // Create a request to check the boolean value
         auto bool_req = std::make_shared<abb_robot_msgs::srv::GetRAPIDBool::Request>();
-        bool_req->path.task = "T_ROB1";
-        bool_req->path.module = "Grinding";
-        bool_req->path.symbol = value; 
+        bool_req->path = createPath(value); 
 
         // Send the request asynchronously
         rws_get_bool_client_->async_send_request(bool_req,
@@ -518,9 +519,7 @@ private:
         }
 
         auto reset_req = std::make_shared<abb_robot_msgs::srv::SetRAPIDBool::Request>();
-        reset_req->path.task = "T_ROB1";
-        reset_req->path.module = "Grinding";
-        reset_req->path.symbol = value;
+        reset_req->path = createPath(value);
         reset_req->value = false;
 
         rws_set_bool_client_->async_send_request(reset_req,
@@ -718,10 +717,7 @@ private:
 
         // Create a request to check the boolean value
         auto bool_req = std::make_shared<abb_robot_msgs::srv::GetRAPIDBool::Request>();
-
-        bool_req->path.task = "T_ROB1";
-        bool_req->path.module = "Grinding";
-        bool_req->path.symbol = symbol_run_status_flag; 
+        bool_req->path = createPath(symbol_run_status_flag); 
 
         // Send the request asynchronously
         rws_get_bool_client_->async_send_request(bool_req,
@@ -813,6 +809,15 @@ private:
             finalizeResponse(test_service_, test_request_header_, test_response_);
         }
 
+    }
+
+    abb_robot_msgs::msg::RAPIDSymbolPath createPath(const std::string& symbol) {
+        /*
+        Utility function to quickly create paths to ABB variables
+        */
+        abb_robot_msgs::msg::RAPIDSymbolPath custom_path = default_path_; // Copy the default path
+        custom_path.symbol = symbol; // Set the desired symbol
+        return custom_path;
     }
 };
 
