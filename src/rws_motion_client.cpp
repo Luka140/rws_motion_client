@@ -412,10 +412,9 @@ private:
         /*
 
         Function called by timer to periodically check a bool from RWS until it is found to be True.
-        Once this is the case, it is flipped back to false, and the timer is stopped. 
+        Once this is the case, next_func is executed. After performing its task. next_func should use resetBoolValue on this bool.
 
         */
-
 
         if (estop_triggered_) {
             RCLCPP_WARN(this->get_logger(), "E-stop is active. Aborting operation.");
@@ -622,6 +621,7 @@ private:
         }
 
         auto acf_req = stamped_std_msgs::msg::Float32Stamped();
+        acf_req.header.stamp = this->get_clock()->now(); 
         acf_req.data = test_request_->force;
         acf_force_publisher_->publish(acf_req);
         
@@ -681,6 +681,7 @@ private:
         
         // TODO turn off acf and grinder    
         auto acf_req = stamped_std_msgs::msg::Float32Stamped();
+        acf_req.header.stamp = this->get_clock()->now(); 
         acf_req.data = -5.;
         acf_force_publisher_->publish(acf_req);
 
@@ -839,6 +840,7 @@ private:
 
             // retract acf
             auto acf_req = stamped_std_msgs::msg::Float32Stamped();
+            acf_req.header.stamp = this->get_clock()->now(); 
             acf_req.data = -15.;
             acf_force_publisher_->publish(acf_req);
 
