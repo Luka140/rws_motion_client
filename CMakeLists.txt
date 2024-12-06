@@ -8,6 +8,7 @@ find_package(std_srvs REQUIRED)
 find_package(abb_robot_msgs REQUIRED)
 find_package(stamped_std_msgs REQUIRED)
 find_package(data_gathering_msgs REQUIRED)
+find_package(ferrobotics_acf REQUIRED)
 
 # Add the executable
 add_executable(motion_client src/rws_motion_client.cpp)
@@ -19,6 +20,7 @@ ament_target_dependencies(motion_client
     abb_robot_msgs
     stamped_std_msgs
     data_gathering_msgs
+    ferrobotics_acf
 )
 
 # Install the executable
