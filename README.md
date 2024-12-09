@@ -3,7 +3,19 @@ This package contains a node which interacts with the RWS interface of the [ABB 
 Note that for this to work correctly, the robot should be in automatic mode, and **single-cycle** mode **not continuous**.
 
 ## Installation and dependencies
-(note that all pkgs should be on the moving grinder branch...)
+In addition to the ABB ROS2 driver, there are some other dependencies for the other hardware components. Note that there may be more dependencies from these packages themselves. 
+- [ABB ROS2 driver](https://github.com/PickNikRobotics/abb_ros2/tree/humble) (`humble` branch)
+- [`data_gathering`](https://github.com/Luka140/data_gathering/tree/moving_grinder) (`moving_grinder` branch)
+- [`ferrobotics_acf`](https://github.com/Luka140/ferrobotics_acf/tree/humble) (`humble` branch)
+- [`data_gathering_msgs`](https://github.com/Luka140/data_gathering_msgs/tree/moving_grinder) (`moving_grinder` branch)
+- [`stamped_std_msgs`](https://github.com/Luka140/stamped_std_msgs)
+```
+git clone git@github.com:PickNikRobotics/abb_ros2.git -b humble
+git clone git@github.com:Luka140/data_gathering.git -b moving_grinder
+git clone git@github.com:Luka140/ferrobotics_acf.git -b humble
+git clone git@github.com:Luka140/data_gathering_msgs.git -b moving_grinder
+git clone git@github.com:Luka140/stamped_std_msgs.git
+```
 
 ## Launch
 A launch file is included to launch the RWS interface. 
