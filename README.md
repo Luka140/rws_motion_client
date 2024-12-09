@@ -14,7 +14,7 @@ This is a node from the [ABB ROS2 driver](https://github.com/PickNikRobotics/abb
 For an overview, see the [docs](https://github.com/PickNikRobotics/abb_ros2/blob/humble/docs/RWSQuickStart.md).
 
 ### rws_motion_client
-This node interacts with the `rws_client` and other nodes to perform a simple grind. An overview of the logic followed by the node is included further [down below](execution_flow) and in a [code comment](https://github.com/Luka140/rws_motion_client/blob/main/src/rws_motion_client.cpp).
+This node interacts with the `rws_client` and other nodes to perform a simple grind. An overview of the logic followed by the node is included further [down below](####execution-flow) and in a [code comment](https://github.com/Luka140/rws_motion_client/blob/main/src/rws_motion_client.cpp).
 
 #### Topics
 Published Topics
@@ -37,7 +37,7 @@ Subscribed Topics
 Provided Services
 
   - `~/start_grind_move` (`data_gathering_msgs::srv::StartGrindTest`)
-        The main service interface to start a grinding motion sequence according to the [execution flow](execution_flow) below. 
+        The main service interface to start a grinding motion sequence according to the [execution flow](####execution-flow) below. 
 
 Called Services
 
@@ -83,11 +83,11 @@ Other parameters
         Maximum allowable ACF extension (mm). When this is exceeded the test will be aborted. 
 
 
-#### [Execution flow](execution_flow)
+#### Execution flow
 The `rws_motion_client` follows the steps below. The 'symbol_x' refer to the names of the variables as set in the RAPID code. They can be set in ROS using the corresponding parameter. 
 
 1.  Wait for a test service call.
-	This includes: force, RPM, tcp speed, passes
+	This includes: force, RPM, TCP speed, passes
 
 2. Check if currently running. 
     This is first done with a boolean flag in this node (service available).
