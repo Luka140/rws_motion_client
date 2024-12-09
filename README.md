@@ -6,7 +6,23 @@ Note that for this to work correctly, the robot should be in automatic mode, and
 (note that all pkgs should be on the moving grinder branch...)
 
 ## Launch
-NOTE THAT FOR A FULL TEST THIS SHOULD BE LAUNCHED FROM DATA GATHERING
+A launch file is included to launch the RWS interface. 
+```
+ros2 launch rws_motion_client rws.launch.py
+```
+This can be used to quickly test whether the RWS ROS services are working correctly. 
+
+To launch the `rws_motion_client` use
+```
+ros2 launch rws_motion_client motion_client.launch.py
+```
+This launches the `rws_motion_client`, `rws_client` for the RWS services, the [`grinder_node`](https://github.com/Luka140/data_gathering/blob/moving_grinder/data_gathering/grinder_node.py) which acts as a PLC interface to control the grinder, and the Ferrobotics [`acf` node](https://github.com/Luka140/ferrobotics_acf/blob/master/src/acf.py).
+
+Note that for the full intended use of this package, it is used with the `data_gathering` [`test_coordinator`](https://github.com/Luka140/data_gathering/blob/moving_grinder/data_gathering/test_coordinator.py). This coordinates multiple tests, rosbag recordings, and scans. All components are then launched from the [`data_gathering` launch file](https://github.com/Luka140/data_gathering/blob/moving_grinder/data_gathering.launch.py):
+```
+ros2 launch data_gathering data_gathering.launch.py
+```
+
 ## Nodes 
 
 ### rws_client
