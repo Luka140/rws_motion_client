@@ -14,7 +14,7 @@ This is a node from the [ABB ROS2 driver](https://github.com/PickNikRobotics/abb
 For an overview, see the [docs](https://github.com/PickNikRobotics/abb_ros2/blob/humble/docs/RWSQuickStart.md).
 
 ### rws_motion_client
-This node interacts with the `rws_client` and other nodes to perform a simple grind. An overview of the logic followed by the node is included further down below and in a [code comment](https://github.com/Luka140/rws_motion_client/blob/main/src/rws_motion_client.cpp).
+This node interacts with the `rws_client` and other nodes to perform a simple grind. An overview of the logic followed by the node is included further [down below](execution_flow) and in a [code comment](https://github.com/Luka140/rws_motion_client/blob/main/src/rws_motion_client.cpp).
 
 #### Topics
 Published Topics
@@ -30,14 +30,14 @@ Subscribed Topics
         Monitors system states of the ABB robot controller. The 'motor on' state is continuously checked during tests. If the motor state switches off, it indicates that the E-stop was pressed or something else went wrong. In this case, the node will attempt to retract the ACF, and turn off the grinder.
   this does mean that this **E-stop link depends on the polling rate of the `rws_client` node**. For a more robust approach, this could be rewritten such that the E-stop IO state of the ABB is checked on a timer using the `rws_client` `get_io_signal` request. The motor-on check was implemented to prevent additional actions for the RWS interface, as this information will be published anyway.
 - `/acf/telem` (`ferrobotics_acf::msg::ACFTelemStamped`)
-  Receives telemetry data from the ACF sensor. This is used to check whether the ACF is approaching its maximum extension. If this occurs the test is aborted, as reaching maximum ACF extension means that the force on the test object is unknown, since part or all of the force could be pushing against the ACF's own endstop.
+  Receives telemetry data from the ACF sensor. This is used to check whether the ACF is approaching its maximum extension. If this occurs the test is aborted, as reaching maximum ACF extension means that the force on the test object is unknown since part or all of the force could be pushing against the ACF's own endstop.
   
 #### Services
 
 Provided Services
 
   - `~/start_grind_move` (`data_gathering_msgs::srv::StartGrindTest`)
-        The main service interface to start a grinding motion sequence according to the execution flow below. 
+        The main service interface to start a grinding motion sequence according to the [execution flow](execution_flow) below. 
 
 Called Services
 
@@ -83,7 +83,7 @@ Other parameters
         Maximum allowable ACF extension (mm). When this is exceeded the test will be aborted. 
 
 
-#### Execution flow
+#### [Execution flow](execution_flow)
 The `rws_motion_client` follows the steps below. The 'symbol_x' refer to the names of the variables as set in the RAPID code. They can be set in ROS using the corresponding parameter. 
 
 1.  Wait for a test service call.
